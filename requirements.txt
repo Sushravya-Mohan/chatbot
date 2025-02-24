@@ -7,3 +7,6 @@ pydantic
 pytest
 httpx
 PyPDF2
+sentence-transformers
+prometheus-fastapi-instrumentator
+faiss-cpu

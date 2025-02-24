@@ -1,48 +1,59 @@
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from app.pdf_loader import load_historical_data
+from sentence_transformers import SentenceTransformer
+import torch
+import faiss  # We'll use this in Step 3
 
-# Simulated small FAQ examples (these can be augmented by PDF content)
+# For demonstration, we still have our small FAQ examples.
 faqs = [
     {"question": "Where is my order?", "answer": "Your order is on the way. It will arrive within 3-5 business days."},
     {"question": "How do I return an item?", "answer": "To return an item, visit our returns page and follow the instructions."},
     {"question": "Do you offer refunds?", "answer": "Yes, refunds are available within 30 days of purchase."}
 ]
 
-# Load large historical data from PDFs (simulate large text data)
-pdf_corpus_text = load_historical_data()  # This can be a long string containing historical FAQs
+# Load large historical data from PDFs (simulate this by reading from our PDFs)
+from app.pdf_loader import load_historical_data
+pdf_corpus_text = load_historical_data()  # Returns a long string
+pdf_documents = [doc.strip() for doc in pdf_corpus_text.split("\n") if doc.strip()]
 
-# Split the PDF text into pseudo-documents (e.g., by line or delimiter)
-pdf_documents = pdf_corpus_text.split("\n")
-# Combine with the FAQ questions for a more extensive retrieval corpus
+# Combine FAQ questions and PDF documents for the retrieval corpus
 retrieval_corpus = [faq["question"] for faq in faqs] + pdf_documents
 
-# Fit TF-IDF on the extended corpus
-vectorizer = TfidfVectorizer(stop_words="english").fit(retrieval_corpus)
-retrieval_embeddings = vectorizer.transform(retrieval_corpus)
+# Initialize a pre-trained SentenceTransformer for embeddings
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-def text_to_embedding(text: str, d_model: int = 64) -> np.ndarray:
-    """Generate a synthetic embedding for a token. Replace with a real model in production."""
-    np.random.seed(abs(hash(text)) % (2**32))
-    return np.random.rand(d_model)
+# Compute embeddings for the entire corpus
+# We convert them to numpy array for FAISS (Step 3)
+corpus_embeddings = embedding_model.encode(retrieval_corpus, convert_to_tensor=False)
+corpus_embeddings = np.array(corpus_embeddings).astype("float32")
+
+# Build a FAISS index (see Step 3 for details)
+d = corpus_embeddings.shape[1]  # dimension of embeddings
+faiss_index = faiss.IndexFlatL2(d)
+faiss_index.add(corpus_embeddings)
 
 def prepare_input(query: str, d_model: int = 64):
-    """Retrieve the most relevant context from the large corpus and prepare the input tensor."""
-    from sklearn.metrics.pairwise import cosine_similarity
-    import torch
-
-    query_vec = vectorizer.transform([query])
-    similarities = cosine_similarity(query_vec, retrieval_embeddings).flatten()
-    top_idx = int(np.argmax(similarities))
+    """
+    Given a query, compute its embedding and use FAISS to retrieve the most similar context.
+    Also return a simulated accuracy measure.
+    """
+    # Compute the embedding for the query using SentenceTransformer
+    query_embedding = embedding_model.encode([query], convert_to_tensor=False)
+    query_embedding = np.array(query_embedding).astype("float32")
+    
+    # Use FAISS to find the closest match
+    k = 1
+    D, I = faiss_index.search(query_embedding, k)
+    top_idx = int(I[0][0])
     retrieved_text = retrieval_corpus[top_idx]
     
-    # Simulated accuracy measure: if the query and retrieved text share common words, assume 'accurate'
-    accuracy = len(set(query.lower().split()) & set(retrieved_text.lower().split())) / len(query.split())
+    # Simulated accuracy: based on cosine similarity (we can compute it here)
+    # For simplicity, we normalize and compute dot product as cosine similarity.
+    query_norm = query_embedding / np.linalg.norm(query_embedding)
+    doc_norm = corpus_embeddings[top_idx] / np.linalg.norm(corpus_embeddings[top_idx])
+    cosine_sim = float(np.dot(query_norm, doc_norm))
     
-    # Combine query with retrieved context
-    combined_text = query + " " + retrieved_text
-    tokens = combined_text.split()
-    embeddings = [text_to_embedding(token, d_model) for token in tokens]
-    embeddings_tensor = torch.tensor(embeddings, dtype=torch.float32).unsqueeze(0)
-    return embeddings_tensor, retrieved_text, accuracy
+    # Prepare a dummy tensor input for the model if needed (here just for compatibility)
+    # In this step, the generation model uses text, so we don't need tensor inputs.
+    dummy_tensor = torch.tensor([[0.0]])  # Not used by generation, kept for interface consistency.
+    
+    return dummy_tensor, retrieved_text, cosine_sim
